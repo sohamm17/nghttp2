@@ -2271,7 +2271,7 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
-  if (config.nreqs == 0 && !config.is_rate_mode()) {
+  if (config.nreqs == 0 && (!config.is_rate_mode() && config.warm_up_time == 0)) {
     std::cerr << "-n: the number of requests must be strictly greater than 0."
               << std::endl;
     exit(EXIT_FAILURE);
@@ -2321,6 +2321,15 @@ int main(int argc, char **argv) {
                    "to the number of clients."
                 << std::endl;
       exit(EXIT_FAILURE);
+    }
+
+    if (config.warm_up_time > 0) {
+      if (config.nclients != config.rate) {
+        std::cerr << "-r, -c: timing-related needs the connection rate to be e"
+                  << "qual to the number of clients."
+                  << std::endl;
+        exit(EXIT_FAILURE);
+      }
     }
   }
 
