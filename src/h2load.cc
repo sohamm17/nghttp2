@@ -226,6 +226,7 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto nclients_per_second = worker->rate;
   auto conns_remaining = worker->nclients - worker->nconns_made;
   auto nclients = std::min(nclients_per_second, conns_remaining);
+  worker->warmup = 1;
 
   for (size_t i = 0; i < nclients; ++i) {
     auto req_todo = worker->nreqs_per_client;
@@ -237,6 +238,7 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
         make_unique<Client>(worker->next_client_id++, worker, req_todo);
 
     ++worker->nconns_made;
+    worker->clients.push_back(client.get());
 
     if (client->connect() != 0) {
       std::cerr << "client could not connect to host" << std::endl;
@@ -260,7 +262,7 @@ namespace {
     client->warmup = 2;
     
     ev_timer_stop(client->worker->loop, &client->warmup_watcher);
-    std::cout << "Warm-up phase is over." << std::endl;
+    std::cout << "Warm-up phase is over for client: " << client->id << std::endl;
     
     client->worker->stats.req_started -= client->req_started;
     client->worker->stats.req_done -= client->req_done;
@@ -275,8 +277,11 @@ namespace {
     client->clear_connect_times();
     client->record_connect_start_time();
     
-    std::cout << "Main benchmark duration is started." << std::endl;
     ev_timer_start(client->worker->loop, &client->duration_watcher);
+    if (client->worker->warmup == 1) {
+      client->worker->warmup = 2;
+      std::cout << "Main benchmark duration is started." << std::endl;
+    }
     
     return;
   }
@@ -286,15 +291,21 @@ namespace {
   // Called when the duration for infinite number of requests are over
   void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     auto client = static_cast<Client *>(w->data);
+    if(client->warmup == 2) {
+      client->req_todo = client->req_done; // there was no definitie "req_todo"
+      client->worker->stats.req_todo += client->req_todo;
+      client->req_inflight = 0;
+      client->req_left = 0;
+      client->warmup = 3;
+    }
     
-    ev_timer_stop(client->worker->loop, &client->duration_watcher);
-  
-    client->req_todo = client->req_done; // there was no definitie "todo"
-    client->worker->stats.req_todo += client->req_todo;
-    client->req_inflight = 0;
-    client->req_left = 0;
-    client->warmup = 3;
-    return;
+    if (client->worker->warmup != 3) {
+      ev_timer_stop(client->worker->loop, &client->duration_watcher);
+    
+      client->worker->warmup = 3;
+      client->worker->stop_all_clients();
+      return;
+    }
   }
 }
 
@@ -434,9 +445,16 @@ Client::~Client() {
     worker->sample_client_stat(&cstat);
   }
   ++worker->client_smp.n;
+  
+  if (worker->config->warm_up_time > 0 &&  warmup != 3) {
+    std::cout << "Duration timeout not called on Client: " << id << std::endl;
+    duration_timeout_cb(worker->loop, &duration_watcher, 0);
+  }
 }
 
-int Client::do_read() { return readfn(*this); }
+int Client::do_read() { 
+  return readfn(*this); 
+}
 int Client::do_write() { return writefn(*this); }
 
 int Client::make_socket(addrinfo *addr) {
@@ -481,6 +499,7 @@ int Client::connect() {
     record_connect_start_time();
   }
   else if (warmup == 0) {
+    worker->warmup = 1;
     warmup = 1; // warmup phase is on
     std::cout << "Warm-up started: " << id << std::endl;
     ev_timer_start(worker->loop, &warmup_watcher);
@@ -1298,6 +1317,12 @@ Worker::Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t req_todo, size_t nclients,
 Worker::~Worker() {
   ev_timer_stop(loop, &timeout_watcher);
   ev_loop_destroy(loop);
+}
+
+void Worker::stop_all_clients() {
+  for(auto client: clients) {
+    client->~Client();
+  }
 }
 
 void Worker::run() {

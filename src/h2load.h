@@ -255,6 +255,15 @@ struct Worker {
   ev_timer timeout_watcher;
   // The next client ID this worker assigns
   uint32_t next_client_id;
+  // This variable tells us whether the client is in warmup phase or not or is over
+  // 0 - Not in warm-up phase, this is the initial state in timing experiment
+  // 1 - In warmup phase. This happens after the first connect. 
+  //   - All statistics are skipped/reversed in this phase
+  // 2 - Main duration phase, in timing experiment; Otherwise, the normal phase
+  // 3 - Main duration is over
+  int warmup;
+  // We need to keep track of the clients
+  std::vector<Client*> clients;
 
   Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t nreq_todo, size_t nclients,
          size_t rate, size_t max_samples, Config *config);
@@ -265,6 +274,7 @@ struct Worker {
   void sample_client_stat(ClientStat *cstat);
   void report_progress();
   void report_rate_progress();
+  void stop_all_clients();
 };
 
 struct Stream {
