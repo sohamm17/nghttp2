@@ -265,12 +265,12 @@ namespace {
     
     client->worker->stats.req_started -= client->req_started;
     client->worker->stats.req_done -= client->req_done;
-    // we also need to adjust the failed and errored
-    client->req_todo = 0;
-    client->req_left = 1;
-    client->req_inflight = 0;
-    client->req_started = 0;
-    client->req_done = 0;
+
+    assert (client->req_todo == 0);
+    assert (client->req_left == 1);
+    assert (client->req_inflight == 0);
+    assert (client->req_started == 0);
+    assert (client->req_done == 0);
     
     client->record_client_start_time();
     client->clear_connect_times();
