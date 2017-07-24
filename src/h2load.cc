@@ -226,7 +226,12 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto nclients_per_second = worker->rate;
   auto conns_remaining = worker->nclients - worker->nconns_made;
   auto nclients = std::min(nclients_per_second, conns_remaining);
-  worker->current_phase = INITIAL_IDLE;
+  if (worker->config->warm_up_time > 0) {
+    worker->current_phase = INITIAL_IDLE;
+  }
+  else {
+    worker->current_phase = MAIN_DURATION;
+  }
 
   for (size_t i = 0; i < nclients; ++i) {
     auto req_todo = worker->nreqs_per_client;
@@ -259,12 +264,16 @@ namespace {
   void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     auto client = static_cast<Client *>(w->data);
     
-    client->current_phase = MAIN_DURATION;
+    if (client->worker->current_phase != MAIN_DURATION) {
+      client->worker->current_phase = MAIN_DURATION;
+      std::cout << "Warm-up phase is over for client: " << client->id << std::endl;
+      std::cout << "Main benchmark duration is started." << std::endl;
+    }
     
-    std::cout << "Warm-up phase is over for client: " << client->id << std::endl;
-    
-    client->worker->stats.req_started -= client->req_started;
-    client->worker->stats.req_done -= client->req_done;
+    assert (client->worker->stats.req_started == 0);
+    assert (client->worker->stats.req_done == 0);
+    // client->worker->stats.req_started -= client->req_started;
+    // client->worker->stats.req_done -= client->req_done;
 
     assert (client->req_todo == 0);
     assert (client->req_left == 1);
@@ -277,10 +286,6 @@ namespace {
     client->record_connect_start_time();
     
     ev_timer_start(client->worker->loop, &client->duration_watcher);
-    if (client->worker->current_phase == WARM_UP) {
-      client->worker->current_phase = MAIN_DURATION;
-      std::cout << "Main benchmark duration is started." << std::endl;
-    }
     
     return;
   }
@@ -290,19 +295,16 @@ namespace {
   // Called when the duration for infinite number of requests are over
   void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     auto client = static_cast<Client *>(w->data);
-    if(client->current_phase == MAIN_DURATION) {
-      client->req_todo = client->req_done; // there was no definitie "req_todo"
-      client->worker->stats.req_todo += client->req_todo;
-      client->req_inflight = 0;
-      client->req_left = 0;
-      client->current_phase = DURATION_OVER;
-    }
+
+    client->req_todo = client->req_done; // there was no finite "req_todo"
+    client->worker->stats.req_todo += client->req_todo;
+    client->req_inflight = 0;
+    client->req_left = 0;
+    client->measurement_calculation_done = true;
     
     if (client->worker->current_phase != DURATION_OVER) {
-    
       client->worker->current_phase = DURATION_OVER;
       client->worker->stop_all_clients();
-      return;
     }
   }
 }
@@ -391,7 +393,8 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
       id(id),
       fd(-1),
       new_connection_requested(false),
-      final(false) {
+      final(false),
+      measurement_calculation_done(false) {
   if (req_todo == 0) {//this means infinite number of requests are to be made
     req_left = 1;
   }
@@ -412,11 +415,6 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
   ev_timer_init(&request_timeout_watcher, client_request_timeout_cb, 0., 0.);
   request_timeout_watcher.data = this;
 
-  // In general, warmup is set to main duration phase. 
-  // This is needed when there will be no warm-up and normal rate-period test
-  // will be provided
-  current_phase = MAIN_DURATION;
-
   if (worker->config->warm_up_time > 0) {
     ev_timer_init(&duration_watcher, duration_timeout_cb, 
                   worker->config->rate_period, 0.);
@@ -425,9 +423,6 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
     ev_timer_init(&warmup_watcher, warmup_timeout_cb, 
                   worker->config->warm_up_time, 0.);
     warmup_watcher.data = this;
-
-    // By default, it is not in warmup phase
-    current_phase = INITIAL_IDLE;
   }
 }
 
@@ -444,7 +439,7 @@ Client::~Client() {
   }
   ++worker->client_smp.n;
   
-  if (worker->config->warm_up_time > 0 &&  current_phase != 3) {
+  if (!measurement_calculation_done) {
     std::cout << "Duration timeout not called on Client: " << id << std::endl;
     duration_timeout_cb(worker->loop, &duration_watcher, 0);
   }
@@ -491,14 +486,14 @@ int Client::make_socket(addrinfo *addr) {
 int Client::connect() {
   int rv;
 
-  if (worker->config->warm_up_time == 0 || current_phase == MAIN_DURATION) {
+  if (worker->config->warm_up_time == 0 
+    || worker->current_phase == MAIN_DURATION) {
     record_client_start_time();
     clear_connect_times();
     record_connect_start_time();
   }
-  else if (current_phase == INITIAL_IDLE) {
+  else if (worker->current_phase == INITIAL_IDLE) {
     worker->current_phase = WARM_UP;
-    current_phase = WARM_UP; // warmup phase is on
     std::cout << "Warm-up started: " << id << std::endl;
     ev_timer_start(worker->loop, &warmup_watcher);
   }
@@ -562,7 +557,7 @@ int Client::try_again_or_fail() {
 
     if (req_left) {
 
-      if (current_phase == MAIN_DURATION) {
+      if (worker->current_phase == MAIN_DURATION) {
         // At the moment, we don't have a facility to re-start request
         // already in in-flight.  Make them fail.
         worker->stats.req_failed += req_inflight;
@@ -625,14 +620,14 @@ int Client::submit_request() {
     return -1;
   }
 
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     ++worker->stats.req_started;
   }
 
   if(worker->config->warm_up_time == 0) {
     --req_left;
   }
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     ++req_started;
     ++req_inflight;
   }
@@ -654,7 +649,7 @@ void Client::process_timedout_streams() {
     }
   }
 
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     worker->stats.req_timedout += req_inflight;
   }
 
@@ -662,7 +657,7 @@ void Client::process_timedout_streams() {
 }
 
 void Client::process_abandoned_streams() {
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     auto req_abandoned = req_inflight + req_left;
 
     worker->stats.req_failed += req_abandoned;
@@ -674,7 +669,7 @@ void Client::process_abandoned_streams() {
 }
 
 void Client::process_request_failure() {
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     worker->stats.req_failed += req_left;
     worker->stats.req_error += req_left;
 
@@ -779,7 +774,7 @@ void Client::on_header(int32_t stream_id, const uint8_t *name, size_t namelen,
       }
     }
 
-    if (current_phase == MAIN_DURATION) {
+    if (worker->current_phase == MAIN_DURATION) {
       if (status >= 200 && status < 300) {
         ++worker->stats.status[2];
         stream.status_success = 1;
@@ -803,7 +798,7 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
   }
   auto &stream = (*itr).second;
 
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     if (status >= 200 && status < 300) {
       ++worker->stats.status[2];
       stream.status_success = 1;
@@ -820,7 +815,7 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
 }
 
 void Client::on_stream_close(int32_t stream_id, bool success, bool final) {
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     ++req_done;
     if (req_inflight > 0) {
       --req_inflight;
@@ -1022,7 +1017,7 @@ int Client::on_read(const uint8_t *data, size_t len) {
   if (rv != 0) {
     return -1;
   }
-  if (current_phase == MAIN_DURATION) {
+  if (worker->current_phase == MAIN_DURATION) {
     worker->stats.bytes_total += len;
   }
   signal_write();

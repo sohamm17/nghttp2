@@ -326,11 +326,10 @@ struct Client {
   ev_timer warmup_watcher;
   std::string selected_proto;
   bool new_connection_requested;
+  bool measurement_calculation_done;
   // true if the current connection will be closed, and no more new
   // request cannot be processed.
   bool final;
-  // Keeps track of the current phase (for timing-based experiment) for the client
-  Phase current_phase;
 
   enum { ERR_CONNECT_FAIL = -100 };
 
