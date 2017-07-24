@@ -226,7 +226,7 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto nclients_per_second = worker->rate;
   auto conns_remaining = worker->nclients - worker->nconns_made;
   auto nclients = std::min(nclients_per_second, conns_remaining);
-  worker->warmup = 1;
+  worker->current_phase = INITIAL_IDLE;
 
   for (size_t i = 0; i < nclients; ++i) {
     auto req_todo = worker->nreqs_per_client;
@@ -259,7 +259,7 @@ namespace {
   void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     auto client = static_cast<Client *>(w->data);
     
-    client->warmup = 2;
+    client->current_phase = MAIN_DURATION;
     
     ev_timer_stop(client->worker->loop, &client->warmup_watcher);
     std::cout << "Warm-up phase is over for client: " << client->id << std::endl;
@@ -278,8 +278,8 @@ namespace {
     client->record_connect_start_time();
     
     ev_timer_start(client->worker->loop, &client->duration_watcher);
-    if (client->worker->warmup == 1) {
-      client->worker->warmup = 2;
+    if (client->worker->current_phase == WARM_UP) {
+      client->worker->current_phase = MAIN_DURATION;
       std::cout << "Main benchmark duration is started." << std::endl;
     }
     
@@ -291,18 +291,18 @@ namespace {
   // Called when the duration for infinite number of requests are over
   void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     auto client = static_cast<Client *>(w->data);
-    if(client->warmup == 2) {
+    if(client->current_phase == MAIN_DURATION) {
       client->req_todo = client->req_done; // there was no definitie "req_todo"
       client->worker->stats.req_todo += client->req_todo;
       client->req_inflight = 0;
       client->req_left = 0;
-      client->warmup = 3;
+      client->current_phase = DURATION_OVER;
     }
     
-    if (client->worker->warmup != 3) {
+    if (client->worker->current_phase != DURATION_OVER) {
       ev_timer_stop(client->worker->loop, &client->duration_watcher);
     
-      client->worker->warmup = 3;
+      client->worker->current_phase = DURATION_OVER;
       client->worker->stop_all_clients();
       return;
     }
@@ -417,7 +417,7 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
   // In general, warmup is set to main duration phase. 
   // This is needed when there will be no warm-up and normal rate-period test
   // will be provided
-  warmup = 2;
+  current_phase = MAIN_DURATION;
 
   if (worker->config->warm_up_time > 0) {
     ev_timer_init(&duration_watcher, duration_timeout_cb, 
@@ -429,7 +429,7 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
     warmup_watcher.data = this;
 
     // By default, it is not in warmup phase
-    warmup = 0;
+    current_phase = INITIAL_IDLE;
   }
 }
 
@@ -446,7 +446,7 @@ Client::~Client() {
   }
   ++worker->client_smp.n;
   
-  if (worker->config->warm_up_time > 0 &&  warmup != 3) {
+  if (worker->config->warm_up_time > 0 &&  current_phase != 3) {
     std::cout << "Duration timeout not called on Client: " << id << std::endl;
     duration_timeout_cb(worker->loop, &duration_watcher, 0);
   }
@@ -493,14 +493,14 @@ int Client::make_socket(addrinfo *addr) {
 int Client::connect() {
   int rv;
 
-  if (worker->config->warm_up_time == 0 || warmup == 2) {
+  if (worker->config->warm_up_time == 0 || current_phase == MAIN_DURATION) {
     record_client_start_time();
     clear_connect_times();
     record_connect_start_time();
   }
-  else if (warmup == 0) {
-    worker->warmup = 1;
-    warmup = 1; // warmup phase is on
+  else if (current_phase == INITIAL_IDLE) {
+    worker->current_phase = WARM_UP;
+    current_phase = WARM_UP; // warmup phase is on
     std::cout << "Warm-up started: " << id << std::endl;
     ev_timer_start(worker->loop, &warmup_watcher);
   }
@@ -564,7 +564,7 @@ int Client::try_again_or_fail() {
 
     if (req_left) {
 
-      if (warmup == 2) {
+      if (current_phase == MAIN_DURATION) {
         // At the moment, we don't have a facility to re-start request
         // already in in-flight.  Make them fail.
         worker->stats.req_failed += req_inflight;
@@ -627,14 +627,14 @@ int Client::submit_request() {
     return -1;
   }
 
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     ++worker->stats.req_started;
   }
 
   if(worker->config->warm_up_time == 0) {
     --req_left;
   }
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     ++req_started;
     ++req_inflight;
   }
@@ -656,7 +656,7 @@ void Client::process_timedout_streams() {
     }
   }
 
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     worker->stats.req_timedout += req_inflight;
   }
 
@@ -664,7 +664,7 @@ void Client::process_timedout_streams() {
 }
 
 void Client::process_abandoned_streams() {
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     auto req_abandoned = req_inflight + req_left;
 
     worker->stats.req_failed += req_abandoned;
@@ -676,7 +676,7 @@ void Client::process_abandoned_streams() {
 }
 
 void Client::process_request_failure() {
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     worker->stats.req_failed += req_left;
     worker->stats.req_error += req_left;
 
@@ -781,7 +781,7 @@ void Client::on_header(int32_t stream_id, const uint8_t *name, size_t namelen,
       }
     }
 
-    if (warmup == 2) {
+    if (current_phase == MAIN_DURATION) {
       if (status >= 200 && status < 300) {
         ++worker->stats.status[2];
         stream.status_success = 1;
@@ -805,7 +805,7 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
   }
   auto &stream = (*itr).second;
 
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     if (status >= 200 && status < 300) {
       ++worker->stats.status[2];
       stream.status_success = 1;
@@ -822,7 +822,7 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
 }
 
 void Client::on_stream_close(int32_t stream_id, bool success, bool final) {
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     ++req_done;
     if (req_inflight > 0) {
       --req_inflight;
@@ -1024,7 +1024,7 @@ int Client::on_read(const uint8_t *data, size_t len) {
   if (rv != 0) {
     return -1;
   }
-  if (warmup == 2) {
+  if (current_phase == MAIN_DURATION) {
     worker->stats.bytes_total += len;
   }
   signal_write();

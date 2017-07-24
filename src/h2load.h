@@ -217,6 +217,14 @@ struct Stats {
 
 enum ClientState { CLIENT_IDLE, CLIENT_CONNECTED };
 
+// This variable tells us whether the client is in warmup phase or not or is over
+// 0 - Not in warm-up phase, this is the initial state in timing experiment
+// 1 - In warmup phase. This happens after the first connect. 
+//   - All statistics are skipped/reversed in this phase
+// 2 - Main duration phase, in timing experiment; Otherwise, the normal phase
+// 3 - Main duration is over
+enum Phase { INITIAL_IDLE, WARM_UP, MAIN_DURATION, DURATION_OVER };
+
 struct Client;
 
 // We use systematic sampling method
@@ -255,13 +263,8 @@ struct Worker {
   ev_timer timeout_watcher;
   // The next client ID this worker assigns
   uint32_t next_client_id;
-  // This variable tells us whether the client is in warmup phase or not or is over
-  // 0 - Not in warm-up phase, this is the initial state in timing experiment
-  // 1 - In warmup phase. This happens after the first connect. 
-  //   - All statistics are skipped/reversed in this phase
-  // 2 - Main duration phase, in timing experiment; Otherwise, the normal phase
-  // 3 - Main duration is over
-  int warmup;
+  // Keeps track of the current phase (for timing-based experiment) for the worker
+  Phase current_phase;
   // We need to keep track of the clients
   std::vector<Client*> clients;
 
@@ -318,7 +321,7 @@ struct Client {
   int fd;
   ev_timer conn_active_watcher;
   ev_timer conn_inactivity_watcher;
-  // This is only active when there are theoretically infinite number of requests
+  // This is only active when there is not a bounded number of requests specified
   ev_timer duration_watcher;
   ev_timer warmup_watcher;
   std::string selected_proto;
@@ -326,13 +329,8 @@ struct Client {
   // true if the current connection will be closed, and no more new
   // request cannot be processed.
   bool final;
-  // This variable tells us whether the client is in warmup phase or not or is over
-  // 0 - Not in warm-up phase, this is the initial state in timing experiment
-  // 1 - In warmup phase. This happens after the first connect. 
-  //   - All statistics are skipped/reversed in this phase
-  // 2 - Main duration phase, in timing experiment; Otherwise, the normal phase
-  // 3 - Main duration is over
-  int warmup;
+  // Keeps track of the current phase (for timing-based experiment) for the client
+  Phase current_phase;
 
   enum { ERR_CONNECT_FAIL = -100 };
 
