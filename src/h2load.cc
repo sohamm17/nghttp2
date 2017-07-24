@@ -261,7 +261,6 @@ namespace {
     
     client->current_phase = MAIN_DURATION;
     
-    ev_timer_stop(client->worker->loop, &client->warmup_watcher);
     std::cout << "Warm-up phase is over for client: " << client->id << std::endl;
     
     client->worker->stats.req_started -= client->req_started;
@@ -300,7 +299,6 @@ namespace {
     }
     
     if (client->worker->current_phase != DURATION_OVER) {
-      ev_timer_stop(client->worker->loop, &client->duration_watcher);
     
       client->worker->current_phase = DURATION_OVER;
       client->worker->stop_all_clients();
