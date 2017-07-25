@@ -228,8 +228,7 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto nclients = std::min(nclients_per_second, conns_remaining);
   if (worker->config->warm_up_time > 0) {
     worker->current_phase = Phase::INITIAL_IDLE;
-  }
-  else {
+  } else {
     worker->current_phase = Phase::MAIN_DURATION;
   }
 
@@ -2697,8 +2696,7 @@ int main(int argc, char **argv) {
       // we only want to consider the rate-period if warm-up is given
       rps = stats.req_success / config.rate_period;
       bps = stats.bytes_total / config.rate_period;
-    }
-    else {
+    } else {
       auto secd = std::chrono::duration_cast<
           std::chrono::duration<double, std::chrono::seconds::period>>(duration);
       rps = stats.req_success / secd.count();
