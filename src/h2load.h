@@ -217,13 +217,14 @@ struct Stats {
 
 enum ClientState { CLIENT_IDLE, CLIENT_CONNECTED };
 
-// This variable tells us whether the client is in warmup phase or not or is over
-// 0 - Not in warm-up phase, this is the initial state in timing experiment
-// 1 - In warmup phase. This happens after the first connect. 
-//   - All statistics are skipped/reversed in this phase
-// 2 - Main duration phase, in timing experiment; Otherwise, the normal phase
-// 3 - Main duration is over
-enum Phase { INITIAL_IDLE, WARM_UP, MAIN_DURATION, DURATION_OVER };
+// This type tells whether the client is in warmup phase or not or is over
+enum class Phase { 
+  INITIAL_IDLE, // Initial idle state before warm-up phase
+  WARM_UP, // Warm up phase when no measurements are done
+  MAIN_DURATION, // Main measurement phase; if timing-based
+                 // test is not run, this is the default phase
+  DURATION_OVER // This phase occurs after the measurements are over
+};
 
 struct Client;
 
@@ -265,7 +266,7 @@ struct Worker {
   uint32_t next_client_id;
   // Keeps track of the current phase (for timing-based experiment) for the worker
   Phase current_phase;
-  // We need to keep track of the clients
+  // We need to keep track of the clients in order to stop them when needed
   std::vector<Client*> clients;
 
   Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t nreq_todo, size_t nclients,
@@ -277,6 +278,7 @@ struct Worker {
   void sample_client_stat(ClientStat *cstat);
   void report_progress();
   void report_rate_progress();
+  // This function calls the destructors of all the clients.
   void stop_all_clients();
 };
 
@@ -326,6 +328,8 @@ struct Client {
   ev_timer warmup_watcher;
   std::string selected_proto;
   bool new_connection_requested;
+  // This variable checks whether client's measurements has been added
+  // to the Worker's statistics
   bool measurement_calculation_done;
   // true if the current connection will be closed, and no more new
   // request cannot be processed.

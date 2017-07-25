@@ -227,10 +227,10 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto conns_remaining = worker->nclients - worker->nconns_made;
   auto nclients = std::min(nclients_per_second, conns_remaining);
   if (worker->config->warm_up_time > 0) {
-    worker->current_phase = INITIAL_IDLE;
+    worker->current_phase = Phase::INITIAL_IDLE;
   }
   else {
-    worker->current_phase = MAIN_DURATION;
+    worker->current_phase = Phase::MAIN_DURATION;
   }
 
   for (size_t i = 0; i < nclients; ++i) {
@@ -264,8 +264,8 @@ namespace {
   void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     auto client = static_cast<Client *>(w->data);
     
-    if (client->worker->current_phase != MAIN_DURATION) {
-      client->worker->current_phase = MAIN_DURATION;
+    if (client->worker->current_phase != Phase::MAIN_DURATION) {
+      client->worker->current_phase = Phase::MAIN_DURATION;
       std::cout << "Warm-up phase is over for client: " << client->id << std::endl;
       std::cout << "Main benchmark duration is started." << std::endl;
     }
@@ -302,8 +302,8 @@ namespace {
     client->req_left = 0;
     client->measurement_calculation_done = true;
     
-    if (client->worker->current_phase != DURATION_OVER) {
-      client->worker->current_phase = DURATION_OVER;
+    if (client->worker->current_phase != Phase::DURATION_OVER) {
+      client->worker->current_phase = Phase::DURATION_OVER;
       client->worker->stop_all_clients();
     }
   }
@@ -487,13 +487,13 @@ int Client::connect() {
   int rv;
 
   if (worker->config->warm_up_time == 0 
-    || worker->current_phase == MAIN_DURATION) {
+    || worker->current_phase == Phase::MAIN_DURATION) {
     record_client_start_time();
     clear_connect_times();
     record_connect_start_time();
   }
-  else if (worker->current_phase == INITIAL_IDLE) {
-    worker->current_phase = WARM_UP;
+  else if (worker->current_phase == Phase::INITIAL_IDLE) {
+    worker->current_phase = Phase::WARM_UP;
     std::cout << "Warm-up started: " << id << std::endl;
     ev_timer_start(worker->loop, &warmup_watcher);
   }
@@ -557,7 +557,7 @@ int Client::try_again_or_fail() {
 
     if (req_left) {
 
-      if (worker->current_phase == MAIN_DURATION) {
+      if (worker->current_phase == Phase::MAIN_DURATION) {
         // At the moment, we don't have a facility to re-start request
         // already in in-flight.  Make them fail.
         worker->stats.req_failed += req_inflight;
@@ -620,14 +620,14 @@ int Client::submit_request() {
     return -1;
   }
 
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     ++worker->stats.req_started;
   }
 
   if(worker->config->warm_up_time == 0) {
     --req_left;
   }
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     ++req_started;
     ++req_inflight;
   }
@@ -649,7 +649,7 @@ void Client::process_timedout_streams() {
     }
   }
 
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     worker->stats.req_timedout += req_inflight;
   }
 
@@ -657,7 +657,7 @@ void Client::process_timedout_streams() {
 }
 
 void Client::process_abandoned_streams() {
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     auto req_abandoned = req_inflight + req_left;
 
     worker->stats.req_failed += req_abandoned;
@@ -669,7 +669,7 @@ void Client::process_abandoned_streams() {
 }
 
 void Client::process_request_failure() {
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     worker->stats.req_failed += req_left;
     worker->stats.req_error += req_left;
 
@@ -774,7 +774,7 @@ void Client::on_header(int32_t stream_id, const uint8_t *name, size_t namelen,
       }
     }
 
-    if (worker->current_phase == MAIN_DURATION) {
+    if (worker->current_phase == Phase::MAIN_DURATION) {
       if (status >= 200 && status < 300) {
         ++worker->stats.status[2];
         stream.status_success = 1;
@@ -798,7 +798,7 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
   }
   auto &stream = (*itr).second;
 
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     if (status >= 200 && status < 300) {
       ++worker->stats.status[2];
       stream.status_success = 1;
@@ -815,7 +815,7 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
 }
 
 void Client::on_stream_close(int32_t stream_id, bool success, bool final) {
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     ++req_done;
     if (req_inflight > 0) {
       --req_inflight;
@@ -1017,7 +1017,7 @@ int Client::on_read(const uint8_t *data, size_t len) {
   if (rv != 0) {
     return -1;
   }
-  if (worker->current_phase == MAIN_DURATION) {
+  if (worker->current_phase == Phase::MAIN_DURATION) {
     worker->stats.bytes_total += len;
   }
   signal_write();
@@ -2289,8 +2289,9 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
-  if (config.nreqs == 0 && (!config.is_rate_mode() && config.warm_up_time == 0)) {
-    std::cerr << "-n: the number of requests must be strictly greater than 0."
+  if (config.nreqs == 0 && config.warm_up_time == 0) {
+    std::cerr << "-n: the number of requests must be strictly greater than 0,"
+              << "timing-based test is not being run."
               << std::endl;
     exit(EXIT_FAILURE);
   }
@@ -2322,9 +2323,30 @@ int main(int argc, char **argv) {
 
   if (config.nclients < config.nthreads) {
     std::cerr << "-c, -t: the number of clients must be greater than or equal "
-                 "to the number of threads."
+              << "to the number of threads."
               << std::endl;
     exit(EXIT_FAILURE);
+  }
+
+  if (config.warm_up_time > 0) {
+    if (config.nclients != config.rate) {
+      std::cerr << "-r, -c: timing-based test needs the connection rate "
+                << "to be equal to the number of clients."
+                << std::endl;
+      exit(EXIT_FAILURE);
+    }
+
+    if (!config.is_rate_mode()) {
+      std::cerr << "-r: rate must be given as the main measurement time.";
+      exit(EXIT_FAILURE);
+    }
+
+    if (config.nreqs != 0) {
+      std::cerr << "-n: the number of requests needs to be zero (0) for timing-"
+               << "based test." 
+               << std::endl;
+      exit(EXIT_FAILURE);
+    }
   }
 
   if (config.is_rate_mode()) {
@@ -2339,15 +2361,6 @@ int main(int argc, char **argv) {
                    "to the number of clients."
                 << std::endl;
       exit(EXIT_FAILURE);
-    }
-
-    if (config.warm_up_time > 0) {
-      if (config.nclients != config.rate) {
-        std::cerr << "-r, -c: timing-related needs the connection rate to be e"
-                  << "qual to the number of clients."
-                  << std::endl;
-        exit(EXIT_FAILURE);
-      }
     }
   }
 
