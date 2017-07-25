@@ -271,8 +271,6 @@ namespace {
     
     assert (client->worker->stats.req_started == 0);
     assert (client->worker->stats.req_done == 0);
-    // client->worker->stats.req_started -= client->req_started;
-    // client->worker->stats.req_done -= client->req_done;
 
     assert (client->req_todo == 0);
     assert (client->req_left == 1);
@@ -285,8 +283,6 @@ namespace {
     client->record_connect_start_time();
     
     ev_timer_start(client->worker->loop, &client->duration_watcher);
-    
-    return;
   }
 }
 
@@ -394,7 +390,9 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
       new_connection_requested(false),
       final(false),
       measurement_calculation_done(false) {
-  if (req_todo == 0) {//this means infinite number of requests are to be made
+  if (req_todo == 0) { // this means infinite number of requests are to be made
+    // This ensures that number of requests are unbounded
+    // Just a positive number is fine, we chose the first positive number
     req_left = 1;
   }
   ev_io_init(&wev, writecb, 0, EV_WRITE);
@@ -438,15 +436,13 @@ Client::~Client() {
   }
   ++worker->client_smp.n;
   
-  if (!measurement_calculation_done) {
+  if (worker->config->warm_up_time > 0 && !measurement_calculation_done) {
     std::cout << "Duration timeout not called on Client: " << id << std::endl;
     duration_timeout_cb(worker->loop, &duration_watcher, 0);
   }
 }
 
-int Client::do_read() { 
-  return readfn(*this); 
-}
+int Client::do_read() { return readfn(*this); }
 int Client::do_write() { return writefn(*this); }
 
 int Client::make_socket(addrinfo *addr) {
@@ -490,8 +486,7 @@ int Client::connect() {
     record_client_start_time();
     clear_connect_times();
     record_connect_start_time();
-  }
-  else if (worker->current_phase == Phase::INITIAL_IDLE) {
+  } else if (worker->current_phase == Phase::INITIAL_IDLE) {
     worker->current_phase = Phase::WARM_UP;
     std::cout << "Warm-up started: " << id << std::endl;
     ev_timer_start(worker->loop, &warmup_watcher);
