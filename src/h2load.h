@@ -271,6 +271,9 @@ struct Worker {
   Phase current_phase;
   // We need to keep track of the clients in order to stop them when needed
   std::vector<Client*> clients;
+  // This is only active when there is not a bounded number of requests specified
+  ev_timer duration_watcher;
+  ev_timer warmup_watcher;
 
   Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t nreq_todo, size_t nclients,
          size_t rate, size_t max_samples, Config *config);
@@ -326,14 +329,8 @@ struct Client {
   int fd;
   ev_timer conn_active_watcher;
   ev_timer conn_inactivity_watcher;
-  // This is only active when there is not a bounded number of requests specified
-  ev_timer duration_watcher;
-  ev_timer warmup_watcher;
   std::string selected_proto;
   bool new_connection_requested;
-  // This variable checks whether client's measurements has been added
-  // to the Worker's statistics
-  bool measurement_calculation_done;
   // true if the current connection will be closed, and no more new
   // request cannot be processed.
   bool final;
