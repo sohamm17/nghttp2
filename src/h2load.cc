@@ -90,6 +90,7 @@ Config::Config()
       connection_window_bits(30),
       rate(0),
       rate_period(1.0),
+      duration(0.0),
       warm_up_time(0.0),
       conn_active_timeout(0.),
       conn_inactivity_timeout(0.),
@@ -119,6 +120,7 @@ Config::~Config() {
 }
 
 bool Config::is_rate_mode() const { return (this->rate != 0); }
+bool Config::is_timing_based_mode() const { return (this->duration > 0); }
 bool Config::has_base_uri() const { return (!this->base_uri.empty()); }
 Config config;
 
@@ -226,7 +228,7 @@ void rate_period_timeout_w_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto nclients_per_second = worker->rate;
   auto conns_remaining = worker->nclients - worker->nconns_made;
   auto nclients = std::min(nclients_per_second, conns_remaining);
-  if (worker->config->warm_up_time > 0) {
+  if (worker->config->is_timing_based_mode() > 0) {
     worker->current_phase = Phase::INITIAL_IDLE;
   } else {
     worker->current_phase = Phase::MAIN_DURATION;
@@ -412,9 +414,9 @@ Client::Client(uint32_t id, Worker *worker, size_t req_todo)
   ev_timer_init(&request_timeout_watcher, client_request_timeout_cb, 0., 0.);
   request_timeout_watcher.data = this;
 
-  if (worker->config->warm_up_time > 0) {
+  if (worker->config->is_timing_based_mode()) {
     ev_timer_init(&duration_watcher, duration_timeout_cb, 
-                  worker->config->rate_period, 0.);
+                  worker->config->duration, 0.);
     duration_watcher.data = this;
     
     ev_timer_init(&warmup_watcher, warmup_timeout_cb, 
@@ -436,7 +438,7 @@ Client::~Client() {
   }
   ++worker->client_smp.n;
   
-  if (worker->config->warm_up_time > 0 && !measurement_calculation_done) {
+  if (worker->config->is_timing_based_mode() > 0 && !measurement_calculation_done) {
     std::cout << "Duration timeout not called on Client: " << id << std::endl;
     duration_timeout_cb(worker->loop, &duration_watcher, 0);
   }
@@ -481,7 +483,7 @@ int Client::make_socket(addrinfo *addr) {
 int Client::connect() {
   int rv;
 
-  if (worker->config->warm_up_time == 0 
+  if (!worker->config->is_timing_based_mode() 
     || worker->current_phase == Phase::MAIN_DURATION) {
     record_client_start_time();
     clear_connect_times();
@@ -618,7 +620,7 @@ int Client::submit_request() {
     ++worker->stats.req_started;
   }
 
-  if(worker->config->warm_up_time == 0) {
+  if(!worker->config->is_timing_based_mode()) {
     --req_left;
   }
   if (worker->current_phase == Phase::MAIN_DURATION) {
@@ -1283,12 +1285,13 @@ Worker::Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t req_todo, size_t nclients,
       rate(rate),
       max_samples(max_samples),
       next_client_id(0) {
-  if (!config->is_rate_mode()) {
+  if (!config->is_rate_mode() && !config->is_timing_based_mode()) {
     progress_interval = std::max(static_cast<size_t>(1), req_todo / 10);
   } else {
     progress_interval = std::max(static_cast<size_t>(1), nclients / 10);
   }
 
+  // Below timeout is not needed in case of timing-based benchmarking
   // create timer that will go off every rate_period
   ev_timer_init(&timeout_watcher, rate_period_timeout_w_cb, 0.,
                 config->rate_period);
@@ -1313,7 +1316,7 @@ void Worker::stop_all_clients() {
 }
 
 void Worker::run() {
-  if (!config->is_rate_mode()) {
+  if (!config->is_rate_mode() && !config->is_timing_based_mode()) {
     for (size_t i = 0; i < nclients; ++i) {
       auto req_todo = nreqs_per_client;
       if (nreqs_rem > 0) {
@@ -1329,10 +1332,13 @@ void Worker::run() {
         client.release();
       }
     }
-  } else {
+  } else if (config->is_rate_mode()){
     ev_timer_again(loop, &timeout_watcher);
 
     // call callback so that we don't waste the first rate_period
+    rate_period_timeout_w_cb(loop, &timeout_watcher, 0);
+  } else {
+    // call the callback to start for one single time
     rate_period_timeout_w_cb(loop, &timeout_watcher, 0);
   }
   ev_run(loop, 0);
@@ -1349,7 +1355,8 @@ void Worker::sample_client_stat(ClientStat *cstat) {
 }
 
 void Worker::report_progress() {
-  if (id != 0 || config->is_rate_mode() || stats.req_done % progress_interval) {
+  if (id != 0 || config->is_rate_mode() || stats.req_done % progress_interval
+    || config->is_timing_based_mode()) {
     return;
   }
 
@@ -1695,12 +1702,28 @@ std::unique_ptr<Worker> create_worker(uint32_t id, SSL_CTX *ssl_ctx,
                 << util::duration_str(config.rate_period) << " ";
   }
 
-  std::cout << "spawning thread #" << id << ": " << nclients
-            << " total client(s). " << rate_report.str() << nreqs
-            << " total requests" << std::endl;
+  if (config.is_timing_based_mode()) {
+    std::cout << "spawning thread #" << id << ": " << nclients
+              << " total client(s). Timing-based test with "
+              << config.warm_up_time << "s of warm-up time and " 
+              << config.duration << "s of main duration for measurements."
+              << std::endl;
+  }
+  else {
+    std::cout << "spawning thread #" << id << ": " << nclients
+              << " total client(s). " << rate_report.str() << nreqs
+              << " total requests" << std::endl;
+  }
 
-  return make_unique<Worker>(id, ssl_ctx, nreqs, nclients, rate, max_samples,
-                             &config);
+  if (config.is_rate_mode()) {
+    return make_unique<Worker>(id, ssl_ctx, nreqs, nclients, rate, max_samples,
+                              &config);
+  } else {
+    // Here rate is same as client because the rate_timeout callback
+    // will be called only once
+    return make_unique<Worker>(id, ssl_ctx, nreqs, nclients, nclients, max_samples,
+                              &config);
+  }
 }
 } // namespace
 
@@ -1851,9 +1874,13 @@ Options:
               length of the period in time.  This option is ignored if
               the rate option is not used.  The default value for this
               option is 1s.
+  -D, --duration=<N>
+              Specifies the main duration for the measurements in case
+              of timing-based benchmarking.
   --warm-up-time=<DURATION>
               Specifies the  time  period  before  starting the actual
-              measurements, in  case  of  duration-based benchmarking.
+              measurements, in  case  of  timing-based benchmarking.
+              Needs to provided along with -D option.
   -T, --connection-active-timeout=<DURATION>
               Specifies  the maximum  time that  h2load is  willing to
               keep a  connection open,  regardless of the  activity on
@@ -1967,6 +1994,7 @@ int main(int argc, char **argv) {
         {"rate", required_argument, nullptr, 'r'},
         {"connection-active-timeout", required_argument, nullptr, 'T'},
         {"connection-inactivity-timeout", required_argument, nullptr, 'N'},
+        {"duration", required_argument, &flag, 'D'},
         {"timing-script-file", required_argument, &flag, 3},
         {"base-uri", required_argument, nullptr, 'B'},
         {"npn-list", required_argument, &flag, 4},
@@ -1978,7 +2006,7 @@ int main(int argc, char **argv) {
         {nullptr, 0, nullptr, 0}};
     int option_index = 0;
     auto c =
-        getopt_long(argc, argv, "hvW:c:d:m:n:p:t:w:H:i:r:T:N:B:", long_options,
+        getopt_long(argc, argv, "hvW:c:d:m:n:p:t:w:H:i:r:T:N:D:B:", long_options,
                     &option_index);
     if (c == -1) {
       break;
@@ -2134,6 +2162,14 @@ int main(int argc, char **argv) {
       config.base_uri = arg.str();
       break;
     }
+    case 'D':
+      config.duration = strtoul(optarg, nullptr, 10);
+      if (config.duration == 0) {
+        std::cerr << "-D: the main duration for timing-based benchmarking "
+                  << "must be positive." << std::endl;
+        exit(EXIT_FAILURE);
+      }
+      break;
     case 'v':
       config.verbose = true;
       break;
@@ -2283,7 +2319,7 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
-  if (config.nreqs == 0 && config.warm_up_time == 0) {
+  if (config.nreqs == 0 && !config.is_timing_based_mode()) {
     std::cerr << "-n: the number of requests must be strictly greater than 0,"
               << "timing-based test is not being run."
               << std::endl;
@@ -2309,7 +2345,7 @@ int main(int argc, char **argv) {
 
   // With timing script, we don't distribute config.nreqs to each
   // client or thread.
-  if (!config.timing_script && config.nreqs < config.nclients && !(config.is_rate_mode() && config.nreqs == 0)) {
+  if (!config.timing_script && config.nreqs < config.nclients && !config.is_timing_based_mode()) {
     std::cerr << "-n, -c: the number of requests must be greater than or "
               << "equal to the clients." << std::endl;
     exit(EXIT_FAILURE);
@@ -2322,22 +2358,10 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
-  if (config.warm_up_time > 0) {
-    if (config.nclients != config.rate) {
-      std::cerr << "-r, -c: timing-based test needs the connection rate "
-                << "to be equal to the number of clients."
-                << std::endl;
-      exit(EXIT_FAILURE);
-    }
-
-    if (!config.is_rate_mode()) {
-      std::cerr << "-r: rate must be given as the main measurement time.";
-      exit(EXIT_FAILURE);
-    }
-
+  if (config.is_timing_based_mode()) {
     if (config.nreqs != 0) {
       std::cerr << "-n: the number of requests needs to be zero (0) for timing-"
-               << "based test." 
+               << "based test. Default value is 1." 
                << std::endl;
       exit(EXIT_FAILURE);
     }
@@ -2687,10 +2711,10 @@ int main(int argc, char **argv) {
   double rps = 0;
   int64_t bps = 0;
   if (duration.count() > 0) {
-    if (config.warm_up_time > 0) {
+    if (config.is_timing_based_mode()) {
       // we only want to consider the rate-period if warm-up is given
-      rps = stats.req_success / config.rate_period;
-      bps = stats.bytes_total / config.rate_period;
+      rps = stats.req_success / config.duration;
+      bps = stats.bytes_total / config.duration;
     } else {
       auto secd = std::chrono::duration_cast<
           std::chrono::duration<double, std::chrono::seconds::period>>(duration);

@@ -85,7 +85,9 @@ struct Config {
   // rate at which connections should be made
   size_t rate;
   ev_tstamp rate_period;
-  // amount of time to wait before starting measurements
+  // amount of time for main measurements in timing-based test
+  ev_tstamp duration;
+  // amount of time to wait before starting measurements in timing-based test
   ev_tstamp warm_up_time;
   // amount of time to wait for activity on a given connection
   ev_tstamp conn_active_timeout;
@@ -120,6 +122,7 @@ struct Config {
   ~Config();
 
   bool is_rate_mode() const;
+  bool is_timing_based_mode() const;
   bool has_base_uri() const;
 };
 
