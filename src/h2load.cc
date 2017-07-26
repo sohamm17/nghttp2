@@ -1708,8 +1708,7 @@ std::unique_ptr<Worker> create_worker(uint32_t id, SSL_CTX *ssl_ctx,
               << config.warm_up_time << "s of warm-up time and " 
               << config.duration << "s of main duration for measurements."
               << std::endl;
-  }
-  else {
+  } else {
     std::cout << "spawning thread #" << id << ": " << nclients
               << " total client(s). " << rate_report.str() << nreqs
               << " total requests" << std::endl;
