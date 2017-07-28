@@ -282,8 +282,10 @@ namespace {
 void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto worker = static_cast<Worker *>(w->data);
   
-  std::cout << "Warm-up phase is over. " << std::endl;
-  std::cout << "Main benchmark duration is started." << std::endl;
+  std::cout << "Warm-up phase is over for thread #" 
+            << worker->id << "." << std::endl;
+  std::cout << "Main benchmark duration is started for thread #" 
+            << worker->id << "." << std::endl;
   
   assert (worker->stats.req_started == 0);
   assert (worker->stats.req_done == 0);
@@ -477,7 +479,8 @@ int Client::connect() {
     record_connect_start_time();
   } else if (worker->current_phase == Phase::INITIAL_IDLE) {
     worker->current_phase = Phase::WARM_UP;
-    std::cout << "Warm-up started: " << id << std::endl;
+    std::cout << "Warm-up started for thread #" << worker->id 
+              << "." << std::endl;
     ev_timer_start(worker->loop, &worker->warmup_watcher);
   }
 
