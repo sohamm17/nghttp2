@@ -285,11 +285,11 @@ namespace {
 // Called when the warmup duration for infinite number of requests are over
 void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto worker = static_cast<Worker *>(w->data);
-  
-  std::cout << "Warm-up phase is over for thread #" 
-            << worker->id << "." << std::endl;
-  std::cout << "Main benchmark duration is started for thread #" 
-            << worker->id << "." << std::endl;
+
+  std::cout << "Warm-up phase is over for thread #" << worker->id << "."
+            << std::endl;
+  std::cout << "Main benchmark duration is started for thread #" << worker->id
+            << "." << std::endl;
   assert(worker->stats.req_started == 0);
   assert(worker->stats.req_done == 0);
 
@@ -299,7 +299,7 @@ void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
     assert(client->req_inflight == 0);
     assert(client->req_started == 0);
     assert(client->req_done == 0);
-    
+
     client->record_client_start_time();
     client->clear_connect_times();
     client->record_connect_start_time();
