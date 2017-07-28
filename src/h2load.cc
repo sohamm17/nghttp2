@@ -273,7 +273,11 @@ void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   }
 
   worker->current_phase = Phase::DURATION_OVER;
+
+  std::cout << "Main benchmark duration is over for thread #" 
+            << worker->id << ". Stopping all clients." << std::endl;
   worker->stop_all_clients();
+  std::cout << "Stopped all clients for thread #" << worker->id << std::endl;
 }
 } // namespace
 
@@ -1318,7 +1322,9 @@ Worker::~Worker() {
 
 void Worker::stop_all_clients() {
   for(auto client: clients) {
-    client->terminate_session();
+    if(client->session) {
+      client->terminate_session();
+    }
   }
 }
 
