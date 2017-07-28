@@ -290,16 +290,15 @@ void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
             << worker->id << "." << std::endl;
   std::cout << "Main benchmark duration is started for thread #" 
             << worker->id << "." << std::endl;
-  
-  assert (worker->stats.req_started == 0);
-  assert (worker->stats.req_done == 0);
+  assert(worker->stats.req_started == 0);
+  assert(worker->stats.req_done == 0);
 
-  for (auto client: worker->clients) {
-    assert (client->req_todo == 0);
-    assert (client->req_left == 1);
-    assert (client->req_inflight == 0);
-    assert (client->req_started == 0);
-    assert (client->req_done == 0);
+  for (auto client : worker->clients) {
+    assert(client->req_todo == 0);
+    assert(client->req_left == 1);
+    assert(client->req_inflight == 0);
+    assert(client->req_started == 0);
+    assert(client->req_done == 0);
     
     client->record_client_start_time();
     client->clear_connect_times();
@@ -617,11 +616,9 @@ int Client::submit_request() {
   ++worker->stats.req_started;
   ++req_started;
   ++req_inflight;
-
   if (!worker->config->is_timing_based_mode()) {
     --req_left;
   }
-  
   // if an active timeout is set and this is the last request to be submitted
   // on this connection, start the active timeout.
   if (worker->config->conn_active_timeout > 0. && req_left == 0) {
