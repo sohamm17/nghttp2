@@ -274,12 +274,12 @@ void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
 
   worker->current_phase = Phase::DURATION_OVER;
 
-  std::cout << "Main benchmark duration is over for thread #" 
-            << worker->id << ". Stopping all clients." << std::endl;
+  std::cout << "Main benchmark duration is over for thread #" << worker->id
+            << ". Stopping all clients." << std::endl;
   worker->stop_all_clients();
   std::cout << "Stopped all clients for thread #" << worker->id << std::endl;
 }
-} // namespace
+}  // namespace
 
 namespace {
 // Called when the warmup duration for infinite number of requests are over
@@ -294,7 +294,7 @@ void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   assert (worker->stats.req_started == 0);
   assert (worker->stats.req_done == 0);
 
-  for(auto client: worker->clients) {
+  for (auto client: worker->clients) {
     assert (client->req_todo == 0);
     assert (client->req_left == 1);
     assert (client->req_inflight == 0);
@@ -618,7 +618,7 @@ int Client::submit_request() {
   ++req_started;
   ++req_inflight;
 
-  if(!worker->config->is_timing_based_mode()) {
+  if (!worker->config->is_timing_based_mode()) {
     --req_left;
   }
   
@@ -1321,8 +1321,8 @@ Worker::~Worker() {
 }
 
 void Worker::stop_all_clients() {
-  for(auto client: clients) {
-    if(client->session) {
+  for (auto client : clients) {
+    if (client->session) {
       client->terminate_session();
     }
   }
