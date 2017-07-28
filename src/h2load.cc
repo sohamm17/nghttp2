@@ -265,7 +265,7 @@ namespace {
 void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   auto worker = static_cast<Worker *>(w->data);
 
-  for(auto client: worker->clients) {
+  for (auto client: worker->clients) {
     client->req_todo = client->req_done; // there was no finite "req_todo"
     worker->stats.req_todo += client->req_todo;
     client->req_inflight = 0;
@@ -603,16 +603,16 @@ int Client::submit_request() {
     return -1;
   }
 
-  if (worker->current_phase == Phase::MAIN_DURATION) {
-    ++worker->stats.req_started;
+  if (worker->current_phase != Phase::MAIN_DURATION) {
+    return 0;
   }
+
+  ++worker->stats.req_started;
+  ++req_started;
+  ++req_inflight;
 
   if(!worker->config->is_timing_based_mode()) {
     --req_left;
-  }
-  if (worker->current_phase == Phase::MAIN_DURATION) {
-    ++req_started;
-    ++req_inflight;
   }
   
   // if an active timeout is set and this is the last request to be submitted
@@ -625,6 +625,10 @@ int Client::submit_request() {
 }
 
 void Client::process_timedout_streams() {
+  if (worker->current_phase != Phase::MAIN_DURATION) {
+    return;
+  }
+
   for (auto &p : streams) {
     auto &req_stat = p.second.req_stat;
     if (!req_stat.completed) {
@@ -632,32 +636,34 @@ void Client::process_timedout_streams() {
     }
   }
 
-  if (worker->current_phase == Phase::MAIN_DURATION) {
-    worker->stats.req_timedout += req_inflight;
-  }
+  worker->stats.req_timedout += req_inflight;
 
   process_abandoned_streams();
 }
 
 void Client::process_abandoned_streams() {
-  if (worker->current_phase == Phase::MAIN_DURATION) {
-    auto req_abandoned = req_inflight + req_left;
-
-    worker->stats.req_failed += req_abandoned;
-    worker->stats.req_error += req_abandoned;
-
-    req_inflight = 0;
-    req_left = 0;
+  if (worker->current_phase != Phase::MAIN_DURATION) {
+    return;
   }
+
+  auto req_abandoned = req_inflight + req_left;
+
+  worker->stats.req_failed += req_abandoned;
+  worker->stats.req_error += req_abandoned;
+
+  req_inflight = 0;
+  req_left = 0;
 }
 
 void Client::process_request_failure() {
-  if (worker->current_phase == Phase::MAIN_DURATION) {
-    worker->stats.req_failed += req_left;
-    worker->stats.req_error += req_left;
-
-    req_left = 0;
+  if (worker->current_phase != Phase::MAIN_DURATION) {
+    return;
   }
+
+  worker->stats.req_failed += req_left;
+  worker->stats.req_error += req_left;
+
+  req_left = 0;
 
   if (req_inflight == 0) {
     terminate_session();
@@ -736,6 +742,9 @@ void Client::on_request(int32_t stream_id) { streams[stream_id] = Stream(); }
 
 void Client::on_header(int32_t stream_id, const uint8_t *name, size_t namelen,
                        const uint8_t *value, size_t valuelen) {
+  if (worker->current_phase != Phase::MAIN_DURATION) {
+    return;
+  }
   auto itr = streams.find(stream_id);
   if (itr == std::end(streams)) {
     return;
@@ -756,32 +765,7 @@ void Client::on_header(int32_t stream_id, const uint8_t *name, size_t namelen,
         break;
       }
     }
-
-    if (worker->current_phase == Phase::MAIN_DURATION) {
-      if (status >= 200 && status < 300) {
-        ++worker->stats.status[2];
-        stream.status_success = 1;
-      } else if (status < 400) {
-        ++worker->stats.status[3];
-        stream.status_success = 1;
-      } else if (status < 600) {
-        ++worker->stats.status[status / 100];
-        stream.status_success = 0;
-      } else {
-        stream.status_success = 0;
-      }
-    }
-  }
-}
-
-void Client::on_status_code(int32_t stream_id, uint16_t status) {
-  auto itr = streams.find(stream_id);
-  if (itr == std::end(streams)) {
-    return;
-  }
-  auto &stream = (*itr).second;
-
-  if (worker->current_phase == Phase::MAIN_DURATION) {
+    
     if (status >= 200 && status < 300) {
       ++worker->stats.status[2];
       stream.status_success = 1;
@@ -794,6 +778,31 @@ void Client::on_status_code(int32_t stream_id, uint16_t status) {
     } else {
       stream.status_success = 0;
     }
+  }
+}
+
+void Client::on_status_code(int32_t stream_id, uint16_t status) {
+  if (worker->current_phase != Phase::MAIN_DURATION) {
+    return;
+  }
+
+  auto itr = streams.find(stream_id);
+  if (itr == std::end(streams)) {
+    return;
+  }
+  auto &stream = (*itr).second;
+
+  if (status >= 200 && status < 300) {
+    ++worker->stats.status[2];
+    stream.status_success = 1;
+  } else if (status < 400) {
+    ++worker->stats.status[3];
+    stream.status_success = 1;
+  } else if (status < 600) {
+    ++worker->stats.status[status / 100];
+    stream.status_success = 0;
+  } else {
+    stream.status_success = 0;
   }
 }
 
@@ -1306,7 +1315,7 @@ Worker::~Worker() {
 
 void Worker::stop_all_clients() {
   for(auto client: clients) {
-    client->~Client();
+    client->terminate_session();
   }
 }
 
@@ -2706,7 +2715,7 @@ int main(int argc, char **argv) {
   int64_t bps = 0;
   if (duration.count() > 0) {
     if (config.is_timing_based_mode()) {
-      // we only want to consider the rate-period if warm-up is given
+      // we only want to consider the main duration if warm-up is given
       rps = stats.req_success / config.duration;
       bps = stats.bytes_total / config.duration;
     } else {
