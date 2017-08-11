@@ -307,7 +307,6 @@ void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   }
 
   worker->current_phase = Phase::MAIN_DURATION;
-  
   ev_timer_start(worker->loop, &worker->duration_watcher);
 }
 } // namespace

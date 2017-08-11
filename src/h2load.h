@@ -287,7 +287,7 @@ struct Worker {
   // This function calls the destructors of all the clients.
   void stop_all_clients();
   // This function frees a client from the list of clients for this Worker.
-  void free_client(Client*);
+  void free_client(Client *);
 };
 
 struct Stream {
