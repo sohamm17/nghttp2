@@ -125,8 +125,8 @@ bool Config::has_base_uri() const { return (!this->base_uri.empty()); }
 Config config;
 
 namespace {
-constexpr size_t MAX_SAMPLES = 1000000;
-} // namespace
+constexpr size_t MAX_SAMPLES = 100000000;
+}  // namespace
 
 Stats::Stats(size_t req_todo, size_t nclients)
     : req_todo(req_todo),
@@ -309,7 +309,7 @@ void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
   worker->current_phase = Phase::MAIN_DURATION;
   ev_timer_start(worker->loop, &worker->duration_watcher);
 }
-} // namespace
+}  // namespace
 
 namespace {
 // Called when an a connection has been inactive for a set period of time
